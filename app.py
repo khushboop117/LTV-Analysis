@@ -1,8 +1,9 @@
+import os
 import streamlit as st
 import plotly.express as px
 import pandas as pd
 from styles import apply_vox_theme
-from analytics import load_and_process_data, compute_survival_curve, compute_cac_payback
+from analytics import load_and_process_data, compute_survival_curve, compute_cac_payback, compute_churn_risk_scoring
 
 st.set_page_config(
     page_title="Vox Media | Subscriptions LTV Intelligence Suite",
@@ -16,12 +17,31 @@ st.title("🎙️ Vox Media: Subscriptions LTV & Growth Intelligence Suite")
 st.markdown("Internal Decision Engine for Digital Publications (*The Cut*, *The Strategist*, *Intelligencer*) and Podcast Networks (*Pivot*, *Today, Explained*).")
 
 st.sidebar.header("📁 Data & Navigation")
-uploaded_file = st.sidebar.file_uploader("Upload subscriptions.csv", type=["csv"])
 
-if uploaded_file is not None:
-    # Read and process uploaded data buffer
-    df = load_and_process_data(uploaded_file)
+data_source = st.sidebar.radio("Select Data Source", ["Use Built-in Sample Data", "Upload Custom CSV"])
+
+df = None
+
+if data_source == "Use Built-in Sample Data":
+    # Robust path resolution based on script directory
+    script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
+    sample_path = os.path.join(script_dir, "subscriptions.csv")
     
+    # Fallback check if running from another context
+    if not os.path.exists(sample_path) and os.path.exists("subscriptions.csv"):
+        sample_path = "subscriptions.csv"
+
+    if os.path.exists(sample_path):
+        df = load_and_process_data(sample_path)
+        st.sidebar.success("✅ Loaded built-in `subscriptions.csv` successfully!")
+    else:
+        st.sidebar.error(f"⚠️ Could not find `subscriptions.csv` in: {script_dir}. Please upload a file manually.")
+else:
+    uploaded_file = st.sidebar.file_uploader("Upload subscriptions.csv", type=["csv"])
+    if uploaded_file is not None:
+        df = load_and_process_data(uploaded_file)
+
+if df is not None:
     st.sidebar.markdown("---")
     st.sidebar.header("🎛️ Analysis Dials")
     channels = ['All'] + list(df['channel'].unique())
@@ -32,7 +52,13 @@ if uploaded_file is not None:
     
     module = st.sidebar.radio(
         "Strategic Module", 
-        ["Executive Summary & LTV", "Subscriber Survival & Churn Risk", "Marketing CAC & Payback Guardrails", "Assumptions, Hypotheses & Next Steps"]
+        [
+            "Executive Summary & LTV", 
+            "Subscriber Survival & Churn Risk", 
+            "Churn Risk Scoring & Prevention", 
+            "Marketing CAC & Payback Guardrails", 
+            "Assumptions, Hypotheses & Next Steps"
+        ]
     )
 
     filtered_df = df.copy()
@@ -104,11 +130,30 @@ if uploaded_file is not None:
         )
         st.plotly_chart(fig_surv, use_container_width=True)
 
+    elif module == "Churn Risk Scoring & Prevention":
+        st.subheader("🚨 Proactive Churn Risk Scoring (Active Subscribers)")
+        st.markdown("Scoring active subscribers by churn vulnerability based on billing milestone friction (e.g., month 1 onboarding and annual renewal cliffs).")
+        
+        risk_df = compute_churn_risk_scoring(filtered_df)
+        
+        col_r1, col_r2, col_r3 = st.columns(3)
+        high_risk_count = len(risk_df[risk_df['Risk_Tier'] == 'High Risk 🚨'])
+        med_risk_count = len(risk_df[risk_df['Risk_Tier'] == 'Medium Risk ⚠️'])
+        low_risk_count = len(risk_df[risk_df['Risk_Tier'] == 'Low Risk ✅'])
+        
+        col_r1.metric("High Risk Subscribers", f"{high_risk_count:,}")
+        col_r2.metric("Medium Risk Subscribers", f"{med_risk_count:,}")
+        col_r3.metric("Low Risk Subscribers", f"{low_risk_count:,}")
+        
+        st.markdown("---")
+        row_limit = st.slider("Number of rows to display", min_value=50, max_value=len(risk_df), value=500, step=50)
+        st.dataframe(risk_df.head(row_limit), use_container_width=True)
+        st.info("**Product Action:** Automatically trigger customized email retention offers or exclusive newsletter previews for subscribers falling into the **High Risk** tier.")
+
     elif module == "Marketing CAC & Payback Guardrails":
         st.subheader("💡 Marketing Payback & CAC Guardrails")
         payback_sim = compute_cac_payback(filtered_df)
         st.dataframe(payback_sim, use_container_width=True)
-        st.success("**Strategic Recommendation:** Allocate budget toward channels with LTV-to-CAC ratios > 3.0x (e.g., podcast sponsorships like *Pivot* and newsletter cross-promotions) and optimize ad platforms toward LTV-weighted custom conversions.")
 
     else:
         st.subheader("📋 Analytical Assumptions, Hypotheses & Recommended Next Steps")
@@ -130,4 +175,4 @@ if uploaded_file is not None:
         """)
 
 else:
-    st.info("👈 Please upload your `subscriptions.csv` file in the sidebar to initialize the Vox Media Intelligence Suite and populate the KPI metrics.")
+    st.info("👈 Please select **Use Built-in Sample Data** or upload your custom `subscriptions.csv` file in the sidebar to initialize the app.")
