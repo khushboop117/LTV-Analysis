@@ -1,14 +1,16 @@
 import pandas as pd
 import numpy as np
 
-def load_and_process_data(uploaded_file, observation_end_date='2026-06-30'):
-    """Parses raw subscriptions CSV stream buffer and computes lifetime values and tenure."""
-    uploaded_file.seek(0)
-    df = pd.read_csv(uploaded_file)
+def load_and_process_data(uploaded_file_or_path, observation_end_date='2026-06-30'):
+    if isinstance(uploaded_file_or_path, str):
+        df = pd.read_csv(uploaded_file_or_path)
+    else:
+        uploaded_file_or_path.seek(0)
+        df = pd.read_csv(uploaded_file_or_path)
     
     df['created_at'] = pd.to_datetime(df['created_at'])
-    df['canceled_at'] = pd.to_datetime(df['canceled_at'])
-    df['ended_at'] = pd.to_datetime(df['ended_at'])
+    df['canceled_at'] = pd.to_datetime(df['canceled_at'], errors='coerce')
+    df['ended_at'] = pd.to_datetime(df['ended_at'], errors='coerce')
     
     obs_end = pd.to_datetime(observation_end_date)
     df['effective_end'] = df['ended_at'].fillna(obs_end)
@@ -58,3 +60,31 @@ def compute_cac_payback(filtered_df):
     payback_sim['Payback_Period (Mo)'] = payback_sim['Payback_Period (Mo)'].astype(str) + ' mo'
     
     return payback_sim
+
+def compute_churn_risk_scoring(df):
+    """Scores active subscribers for churn risk based on plan, tenure, and historical drop-off risk."""
+    active_df = df[df['ended_at'].isnull()].copy()
+    
+    # Heuristic scoring model: Monthly plans near month 1 or annual plans near month 12 have higher risk
+    def risk_score(row):
+        tenure = row['lifetime_months']
+        if row['plan'] == 'monthly':
+            # Monthly risk peaks around month 1 and month 3
+            score = 0.45 if tenure <= 1 else (0.30 if tenure <= 3 else 0.15)
+        else:
+            # Annual risk peaks near renewal (month 11-12)
+            score = 0.60 if (tenure >= 10 and tenure <= 12) else 0.20
+        return round(score * 100, 1)
+        
+    active_df['Churn_Risk_Score (%)'] = active_df.apply(risk_score, axis=1)
+    
+    def risk_tier(score):
+        if score >= 40:
+            return 'High Risk 🚨'
+        elif score >= 25:
+            return 'Medium Risk ⚠️'
+        else:
+            return 'Low Risk ✅'
+            
+    active_df['Risk_Tier'] = active_df['Churn_Risk_Score (%)'].apply(risk_tier)
+    return active_df[['subscription_id', 'channel', 'plan', 'lifetime_months', 'Churn_Risk_Score (%)', 'Risk_Tier']]
